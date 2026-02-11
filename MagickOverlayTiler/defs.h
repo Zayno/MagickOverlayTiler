@@ -1,20 +1,24 @@
 #pragma once
 using namespace Magick;
 
-struct XYPoint
+extern int IconSizeAfterResize;
+extern bool IsFullyTransparent(const Magick::Image& image, int XOffset, int YOffset);
+
+struct PointData
 {
-	XYPoint ()
+	PointData()
 	{
-		XX = YY = 0;
+		XX = YY = IconID = 0;
 	}
-	XYPoint ( double _x, double _y )
+	PointData(double _x, double _y)
 	{
 		XX = _x;
 		YY = _y;
+		IconID = 0;
 	}
 	double XX;
 	double YY;
-	//string icon;
+	int IconID;
 };
 
 
@@ -134,28 +138,30 @@ public:
 	}
 
 
-	void mark_intersections ( int ox, int oy )
+	void mark_intersections(int ox, int oy)
 	{
 		constexpr int GRID_SIZE = 768;
 		constexpr int CELLS_PER = 3;
 		constexpr int CELL_SIZE = GRID_SIZE / CELLS_PER; // 256
-		constexpr int Icon_Size = 80;//CAREFUL with icon size
+		int Icon_Size = IconSizeAfterResize;			 //CAREFUL with icon size
 
-
-		Rect overlay { ox, oy, Icon_Size, Icon_Size };
+		Rect overlay{ox, oy, Icon_Size, Icon_Size};
 
 		//int countt = 0;
 		// Check each of the 9 cells
-		for ( int row = 0; row < CELLS_PER; ++row )
+		for (int row = 0; row < CELLS_PER; ++row)
 		{
-			for ( int col = 0; col < CELLS_PER; ++col )
+			for (int col = 0; col < CELLS_PER; ++col)
 			{
-				Rect cell { col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE };
-				if ( intersects ( cell, overlay ) )
+				Rect cell{col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE};
+				if (intersects(cell, overlay))
 				{
 					int IntersectIndex = row * CELLS_PER + col;
-					SubTiles[IntersectIndex]->copyPixels ( BigTile, Geometry ( 256, 256, col * CELL_SIZE, row * CELL_SIZE ), Offset ( 0, 0 ) );
-					IntersectionList[IntersectIndex] = true;
+					if (!IsFullyTransparent(BigTile, col * CELL_SIZE, row * CELL_SIZE))
+					{
+						SubTiles[IntersectIndex]->copyPixels( BigTile, Geometry(256, 256, col * CELL_SIZE, row * CELL_SIZE), Offset(0, 0));
+						IntersectionList[IntersectIndex] = true;
+					}
 
 					//countt++;
 				}
@@ -164,7 +170,6 @@ public:
 
 		//std::cout << countt << std::endl;
 	}
-
 };
 
 Image Conical_SPP ( "Icons\\1_Conical_SPP.png" );
@@ -176,31 +181,67 @@ Image BarrelSPP ( "Icons\\6_BarrelSPP.png" );
 Image superbuoy_SPP ( "Icons\\7_superbuoy_SPP.png" );
 Image iced_buoySPP ( "Icons\\8_iced_buoySPP.png" );
 
-Image* GetRandomIcon ( int seed )
+Image* GetIconByID ( int IconID )
 {
-	//int choice = rng.Next(0, 8); // 0..7
-	int choice = seed % 8;
-
-	switch ( choice )
+	switch (IconID)
 	{
-		case 0:
-		return &Conical_SPP;
+		//BOYSPP is According to BOYSHP attribute
 		case 1:
-		return &Can_SPP;
+		return &Conical_SPP;
 		case 2:
-		return &Sphere_SPP;
+		return &Can_SPP;
 		case 3:
-		return &PillarSPP;
+		return &Sphere_SPP;
 		case 4:
-		return &Spar_SPP;
+		return &PillarSPP;
 		case 5:
-		return &BarrelSPP;
+		return &Spar_SPP;
 		case 6:
-		return &superbuoy_SPP;
+		return &BarrelSPP;
 		case 7:
+		return &superbuoy_SPP;
+		case 8:
 		return &iced_buoySPP;
 
 		default:
-		return &Conical_SPP;
+		{
+			std::cout << "Invalid IconID: " << IconID << std::endl;
+			return NULL;
+
+		}
 	}
+}
+
+void ResizeImages(int ZoomLevel)
+{
+	const int OriginalIconSize = 80;			// Original icon size (80x80)
+	int NewIconSize = OriginalIconSize; // Default to original size
+
+	if (ZoomLevel < 10)
+	{
+		NewIconSize = 30;
+	}
+	else if (ZoomLevel < 12)
+	{
+		NewIconSize = 40;
+	}
+	else if (ZoomLevel < 15)
+	{
+		NewIconSize = 50;
+	}
+	else
+	{
+		NewIconSize = OriginalIconSize;
+	}
+
+	Geometry NewSize(NewIconSize, NewIconSize); // Adjust this size as needed based on the zoom level
+
+	Conical_SPP.resize(NewSize);
+	Can_SPP.resize(NewSize);
+	Sphere_SPP.resize(NewSize);
+	PillarSPP.resize(NewSize);
+	Spar_SPP.resize(NewSize);
+	BarrelSPP.resize(NewSize);
+	superbuoy_SPP.resize(NewSize);
+	iced_buoySPP.resize(NewSize);
 }

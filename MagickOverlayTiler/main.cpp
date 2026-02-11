@@ -4,9 +4,8 @@
 #include <vector>
 #include <chrono>
 #include <cmath>
-#include<Magick++.h>
-#include"defs.h"
-
+#include <Magick++.h>
+#include "defs.h"
 
 using namespace std;
 using namespace Magick;
@@ -15,30 +14,61 @@ using namespace std::chrono;
 
 Grid3X3 GridBase;
 
-vector<XYPoint> CoordsList;
+vector<PointData> CoordsList;
 const path TilesOutDir = "C:\\TilesOut";
-const int IconHalfSize = 40;
+int IconHalfSize = 40;
+int IconSizeAfterResize = -1;
 double OriginShift = 20037508.342789244;
 
 //Image Ring ( "C:\\QGIS\\Ring.png" );
 
 Image TempTile(Geometry(256, 256), Color("rgba(0,0,0,0.0)"));
 
-
 void Init()
 {
 	TempTile.backgroundColor(Color("rgba(0,0,0,0.0)"));
 	TempTile.magick("PNG");
-
 }
 
+bool IsFullyTransparent(const Magick::Image& image, int XOffset, int YOffset)
+{
+	if (!image.alpha())
+		return false;
+
+	const size_t width = 256;
+	const size_t height = 256;
+
+	const Magick::Quantum* pixels = image.getConstPixels(XOffset, YOffset, width, height);
+
+	if (!pixels)
+		return false;
+
+	const size_t channels = image.channels();
+
+	// In typical RGBA, alpha is the last channel
+	const size_t alphaOffset = channels - 1;
+
+	const Magick::Quantum transparent = 0; // See note below
+
+	for (size_t i = 0; i < width * height; ++i)
+	{
+		const Magick::Quantum alpha = pixels[i * channels + alphaOffset];
+
+		if (alpha != transparent)
+		{
+			return false; // Found visible pixel
+		}
+	}
+
+	return true;
+}
 
 // Step 1: normalize EPSG:3857 meters to [0..1]
-XYPoint Normalize(double x, double y)
+PointData Normalize(double x, double y)
 {
 	double xNorm = (x + OriginShift) / (2 * OriginShift);
 	double yNorm = (OriginShift - y) / (2 * OriginShift); // top-left origin
-	return XYPoint(xNorm, yNorm);
+	return PointData(xNorm, yNorm);
 }
 
 // Step 2: to pixel space and tile indices at zoom
@@ -54,16 +84,13 @@ void ToPixelsAndTiles(double xNorm, double yNorm, int zoom, int& tx, int& ty, do
 
 	offX = px - (tx * 256);
 	offY = py - (ty * 256);
-
 }
-
 
 void HandleTileOverlay(Image& SingleTile, int TileX, int TileY, int ZoomLevel)
 {
 	path TilePath = TilesOutDir / to_string(ZoomLevel) / to_string(TileX);
 	create_directories(TilePath);
 	TilePath = TilePath / (to_string(TileY) + string(".png"));
-
 
 	TempTile.erase();
 
@@ -80,13 +107,12 @@ void HandleTileOverlay(Image& SingleTile, int TileX, int TileY, int ZoomLevel)
 
 	TempTile.write(MyPath);
 	//cout << MyPath << endl;
-
 }
 
-
-void ProcessTile(double x3857, double y3857, int ZoomLevel)
+void ProcessTile(const PointData& MyPoint, int ZoomLevel)
 {
-	XYPoint Normalized = Normalize(x3857, y3857);
+	PointData Normalized = Normalize(MyPoint.XX, MyPoint.YY);
+	Normalized.IconID = MyPoint.IconID;
 
 	int tx = 0, ty = 0;
 	double offX = 0, offY = 0;
@@ -95,10 +121,7 @@ void ProcessTile(double x3857, double y3857, int ZoomLevel)
 	int X_Offset = 256 + (int)offX - IconHalfSize;
 	int Y_Offset = 256 + (int)offY - IconHalfSize;
 
-	int Seed = abs((int)x3857) + abs((int)y3857);
-
-	GridBase.GridOverlay(X_Offset, Y_Offset, *GetRandomIcon(Seed));
-
+	GridBase.GridOverlay(X_Offset, Y_Offset, *GetIconByID(Normalized.IconID));
 
 	//int D = 5;
 	//if ( D == 5 )
@@ -127,29 +150,32 @@ void ProcessTile(double x3857, double y3857, int ZoomLevel)
 		HandleTileOverlay(*GridBase.SubTiles[7], tx, ty + 1, ZoomLevel);
 	if (GridBase.IsGridTileUsed(8))
 		HandleTileOverlay(*GridBase.SubTiles[8], tx + 1, ty + 1, ZoomLevel);
-
 }
 
-XYPoint split(string& s)
+PointData SplitToPointData(const std::string& input)
 {
-	XYPoint Result;
-	string delimiter(";");
-	size_t pos = 0;
-	std::string token;
-	while ((pos = s.find(delimiter)) != string::npos)
+	std::string_view sv(input);
+
+	size_t first = sv.find(';');
+	size_t second = sv.find(';', first + 1);
+
+	if (first == std::string_view::npos || second == std::string_view::npos)
 	{
-		token = s.substr(0, pos);
-		Result.XX = std::stod(token);
-		s.erase(0, pos + delimiter.length());
+		cout << "Invalid input format" << endl;
 	}
-	Result.YY = std::stod(s);
 
-	return Result;
+	PointData result;
+
+	result.XX = std::stod(std::string(sv.substr(0, first)));
+	result.YY = std::stod(std::string(sv.substr(first + 1, second - first - 1)));
+	result.IconID = std::stoi(std::string(sv.substr(second + 1)));
+
+	return result;
 }
 
-int FillCoordinates()
+void FillCoordinates()
 {
-	path filepath = "C:\\QGIS\\Short_X_Y.txt";
+	path filepath = "C:\\QGIS\\X_Y.csv";
 
 	ifstream file;
 	file.open(filepath);
@@ -157,22 +183,18 @@ int FillCoordinates()
 	if (!file)
 	{
 		std::cerr << "Could not open " << filepath << "\n";
-		return 1;
+		return;
 	}
 
 	std::string line;
 	while (std::getline(file, line))
 	{
-		std::string xStr, yStr;
-		CoordsList.push_back(split(line));
+		CoordsList.push_back(SplitToPointData(line));
 	}
 }
 
-
 int main(int argc, char** argv)
 {
-
-
 	//if (argc < 2)
 	//{
 	//	std::cerr << "Usage: " << argv[0] << " <integer>\n";
@@ -182,41 +204,38 @@ int main(int argc, char** argv)
 	//int ZoomLevel = std::atoi(argv[1]);
 	int ZoomLevel = 10;
 
-
 	cout << "Working...  ZOOM:  " << ZoomLevel << endl;
 
 	auto start = high_resolution_clock::now();
-
 
 	InitializeMagick(*argv);
 
 	Init();
 
+	ResizeImages(ZoomLevel);
+	IconHalfSize = Conical_SPP.size().width() / 2;
+	IconSizeAfterResize = Conical_SPP.size().width();
 	FillCoordinates();
 
 	for (size_t i = 0; i < CoordsList.size(); i++)
 	{
-		double Coord_X = CoordsList[i].XX;
-		double Coord_Y = CoordsList[i].YY;
+		PointData MyPoint = CoordsList[i];
 
-		ProcessTile(Coord_X, Coord_Y, ZoomLevel);
+		ProcessTile(MyPoint, ZoomLevel);
 	}
-
 
 	auto end = high_resolution_clock::now();
 
-	duration<double> elapsed = end - start;  // seconds as double
+	duration<double> elapsed = end - start; // seconds as double
 
 	std::cout << "Elapsed time: " << elapsed.count() << " seconds\n";
 
-
 	std::cout << "\a Press Enter to exit...";
-	std::cin.get();   // waits for user to press Enter
+	std::cin.get(); // waits for user to press Enter
 	return 0;
 	//try
 	//{
 	//	Image image ( "C:\\QGIS\\Ring.png" );
-
 
 	//	image.write ( "outputzzz.png" );
 
@@ -227,7 +246,4 @@ int main(int argc, char** argv)
 	//	std::cout << "Caught exception: " << error_.what () << std::endl;
 	//	return 1;
 	//}
-
-
-
 }
